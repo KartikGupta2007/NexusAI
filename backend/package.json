@@ -1,0 +1,49 @@
+{
+  "name": "nexusai",
+  "version": "1.0.0",
+  "description": "Perplexity-inspired AI search engine with LLM-powered answers, web search, real-time streaming, and conversational chat.",
+  "license": "ISC",
+  "author": "Kartik Gupta",
+  "type": "module",
+  "main": "src/server.ts",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json && npm run copy:sql",
+    "start": "node dist/server.js",
+    "migrate": "tsx src/db/migrate.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "copy:sql": "node --input-type=module -e \"import{cp}from'node:fs/promises';await cp('src/db/migrations','dist/db/migrations',{recursive:true})\""
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.40",
+    "@anthropic-ai/sdk": "^0.120.0",
+    "@tavily/core": "^0.7.7",
+    "ai": "^7.0.70",
+    "bcrypt": "^6.0.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
+    "helmet": "^8.3.0",
+    "jose": "^6.2.9",
+    "jsonwebtoken": "^9.0.3",
+    "nodemon": "^3.1.14",
+    "pg": "^8.23.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^26.2.0",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
