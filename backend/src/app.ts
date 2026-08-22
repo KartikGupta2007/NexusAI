@@ -5,6 +5,7 @@ import helmet from "helmet";
 import { env } from "./config/env.ts";
 import { errorHandler, notFoundHandler } from "./middlewares/error.middleware.ts";
 import chatRouter from "./routes/chat.routes.ts";
+import conversationRouter from "./routes/conversation.routes.ts";
 import userRouter from "./routes/user.routes.ts";
 
 const app = express();
@@ -37,6 +38,7 @@ app.get("/health", (_req, res) => {
 // ROUTES
 app.use("/api/v1/user", userRouter);
 app.use("/api/v1/chat", chatRouter);
+app.use("/api/v1/conversations", conversationRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

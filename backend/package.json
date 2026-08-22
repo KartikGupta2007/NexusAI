@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.json && npm run copy:sql",
     "start": "node dist/server.js",
     "migrate": "tsx src/db/migrate.ts",
+    "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "copy:sql": "node --input-type=module -e \"import{cp}from'node:fs/promises';await cp('src/db/migrations','dist/db/migrations',{recursive:true})\""
   },
