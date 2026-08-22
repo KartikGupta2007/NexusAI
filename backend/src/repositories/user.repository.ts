@@ -1,4 +1,4 @@
-import type { PoolClient } from "pg";
+import type { PoolClient, QueryResultRow } from "pg";
 import { pool, query } from "../db/pool.ts";
 
 export interface UserRow {
@@ -47,8 +47,11 @@ const USER_COLUMNS = `
 
 type Executor = Pick<PoolClient, "query"> | typeof pool;
 
-const run = <T extends UserRow>(executor: Executor | undefined, text: string, params: unknown[]) =>
-    executor ? executor.query<T>(text, params) : query<T>(text, params);
+const run = <T extends QueryResultRow = UserRow>(
+    executor: Executor | undefined,
+    text: string,
+    params: unknown[],
+) => (executor ? executor.query<T>(text, params) : query<T>(text, params));
 
 export const findUserByEmail = async (email: string, executor?: Executor) => {
     const { rows } = await run<UserRow>(
@@ -158,4 +161,72 @@ export const updatePasswordHash = async (
         [userId, passwordHash],
     );
     return rows[0] ?? null;
+};
+
+/**
+ * Outcome of an attempted deduction. A discriminated union so the caller cannot read `remaining`
+ * without having checked that the charge actually happened.
+ */
+export type CreditDeduction =
+    | { ok: true; remaining: number }
+    | { ok: false; reason: "insufficient"; credits: number }
+    | { ok: false; reason: "not_found" };
+
+/**
+ * Charges `amount` credits, atomically.
+ *
+ * `AND credits >= $2` is inside the UPDATE on purpose. A read-then-check-then-write would let two
+ * concurrent requests both observe a sufficient balance and both charge it. Here the guard is a
+ * qual on the row being updated, so when two transactions race, the second blocks on the row lock
+ * and Postgres re-evaluates that qual against the *updated* row before proceeding — the loser
+ * matches nothing and reports insufficient. No advisory lock or SELECT ... FOR UPDATE needed.
+ *
+ * `CHECK (credits >= 0)` on the column is the backstop: even a bug in this predicate could not
+ * persist a negative balance.
+ *
+ * A zero-row result is ambiguous, so it is classified with a second read. That query is only ever
+ * reached on the failure path, and being non-atomic there is harmless: it decides an error message,
+ * not whether money moved.
+ */
+export const deductUserCredits = async (
+    userId: string,
+    amount: number,
+    executor?: Executor,
+): Promise<CreditDeduction> => {
+    if (!Number.isInteger(amount) || amount <= 0) {
+        // A negative amount would turn `credits - $2` into a top-up.
+        throw new Error(`credit amount must be a positive integer, received ${amount}`);
+    }
+
+    const { rows } = await run<{ credits: number }>(
+        executor,
+        `UPDATE users
+                SET credits = credits - $2
+              WHERE id = $1
+                AND credits >= $2
+          RETURNING credits`,
+        [userId, amount],
+    );
+
+    if (rows[0]) return { ok: true, remaining: rows[0].credits };
+
+    const { rows: existing } = await run<{ credits: number }>(
+        executor,
+        `SELECT credits FROM users WHERE id = $1`,
+        [userId],
+    );
+
+    return existing[0]
+        ? { ok: false, reason: "insufficient", credits: existing[0].credits }
+        : { ok: false, reason: "not_found" };
+};
+
+/** Current balance, for display. Reads only — never use this to gate a charge. */
+export const findUserCredits = async (userId: string, executor?: Executor) => {
+    const { rows } = await run<{ credits: number }>(
+        executor,
+        `SELECT credits FROM users WHERE id = $1`,
+        [userId],
+    );
+    return rows[0]?.credits ?? null;
 };

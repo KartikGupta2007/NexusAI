@@ -182,6 +182,90 @@ export const findRecentMessagesForUserConversation = async (
     return rows;
 };
 
+/** Creates a conversation for `userId`. The owner comes from the session, never the client. */
+export const createConversation = async (
+    userId: string,
+    title: string | null,
+    executor?: Executor,
+) => {
+    const { rows } = await run<ConversationRow>(
+        executor,
+        `INSERT INTO conversations (user_id, title)
+              VALUES ($1, $2)
+           RETURNING id, title, created_at, updated_at`,
+        [userId, title],
+    );
+    return rows[0]!;
+};
+
+/**
+ * Appends a message to a conversation the user owns.
+ *
+ * The INSERT selects from `conversations` filtered by owner, so a caller who does not own the
+ * conversation writes nothing and gets null back — ownership is a property of the write rather
+ * than a check that could be skipped, and there is no window between checking and writing.
+ */
+export const createMessageForUserConversation = async (
+    input: {
+        conversationId: string;
+        userId: string;
+        role: "user" | "assistant" | "system";
+        content: string;
+    },
+    executor?: Executor,
+) => {
+    const { rows } = await run<MessageRow>(
+        executor,
+        `INSERT INTO messages (conversation_id, role, content)
+              SELECT c.id, $3, $4
+                FROM conversations c
+               WHERE c.id = $1
+                 AND c.user_id = $2
+           RETURNING id, role, content, created_at`,
+        [input.conversationId, input.userId, input.role, input.content],
+    );
+    return rows[0] ?? null;
+};
+
+/** Retitles a conversation the user owns. Returns null when it is not theirs. */
+export const renameConversation = async (
+    conversationId: string,
+    userId: string,
+    title: string,
+    executor?: Executor,
+) => {
+    const { rows } = await run<ConversationRow>(
+        executor,
+        `UPDATE conversations
+                SET title = $3
+              WHERE id = $1
+                AND user_id = $2
+          RETURNING id, title, created_at, updated_at`,
+        [conversationId, userId, title],
+    );
+    return rows[0] ?? null;
+};
+
+/**
+ * Bumps `updated_at` so the sidebar orders by real activity.
+ *
+ * Inserting a message does not touch the conversation row — 002_chat.sql deliberately left that
+ * out of the schema rather than firing a trigger twice per turn — so the pipeline does it once,
+ * explicitly, here. The BEFORE UPDATE trigger sets the timestamp.
+ */
+export const touchConversation = async (
+    conversationId: string,
+    userId: string,
+    executor?: Executor,
+) => {
+    const { rowCount } = await run(
+        executor,
+        `UPDATE conversations SET updated_at = NOW() WHERE id = $1 AND user_id = $2`,
+        [conversationId, userId],
+    );
+    return (rowCount ?? 0) > 0;
+};
+
 /**
  * Resolves one message by id, scoped to its owner.
  *

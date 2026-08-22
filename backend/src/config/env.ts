@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import { z } from "zod";
+import { DEFAULT_USER_CREDITS } from "../constants.ts";
 
 /**
  * Durations are accepted as `30s`, `15m`, `1d`, ... or as a bare number of seconds.
@@ -54,7 +55,7 @@ const envSchema = z.object({
     NEON_AUTH_JWKS_URL: z.string().min(1).optional(),
 
     BCRYPT_SALT_ROUNDS: z.coerce.number().int().min(10).max(15).default(12),
-    SIGNUP_CREDITS: z.coerce.number().int().min(0).default(50),
+    SIGNUP_CREDITS: z.coerce.number().int().min(0).default(DEFAULT_USER_CREDITS),
 
     // Comma-separated allowlist. Credentialed CORS cannot use "*", so this must be explicit.
     CORS_ORIGINS: z.string().default("http://localhost:5173"),

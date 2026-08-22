@@ -38,6 +38,16 @@ export const createProbeUser = async (): Promise<string> => {
     return id;
 };
 
+/** Sets a probe user's balance directly, so credit edge cases are reachable. */
+export const setProbeCredits = async (userId: string, credits: number): Promise<void> => {
+    await query(`UPDATE users SET credits = $2 WHERE id = $1`, [userId, credits]);
+};
+
+/** Reads a probe user's balance. */
+export const readProbeCredits = async (userId: string): Promise<number> =>
+    (await query<{ credits: number }>(`SELECT credits FROM users WHERE id = $1`, [userId]))
+        .rows[0]!.credits;
+
 export const createProbeConversation = async (
     userId: string,
     title: string | null = "audit probe",

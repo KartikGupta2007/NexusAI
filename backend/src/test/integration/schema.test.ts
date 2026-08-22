@@ -1,7 +1,7 @@
 /** Audit sections 6 and 8 — the live schema: constraints, FK actions, indexes, migrations. */
 import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
-import { EMBEDDING_DIMENSIONS } from "../../constants.ts";
+import { DEFAULT_USER_CREDITS, EMBEDDING_DIMENSIONS } from "../../constants.ts";
 import { closePool, query } from "../../db/pool.ts";
 import { cleanupProbes, createProbeConversation, createProbeUser, expectPgError, PG } from "../helpers/probe.ts";
 
@@ -27,6 +27,7 @@ describe("migrations", () => {
             "001_init_auth.sql", "002_chat.sql", "003_pgvector.sql",
             "004_conversation_summaries.sql", "005_vector_memories.sql",
             "006_message_sources.sql", "007_message_sources_blank_checks.sql",
+            "008_user_credits.sql",
         ]);
     });
 
@@ -44,6 +45,37 @@ describe("migrations", () => {
             "conversation_summaries", "conversations", "message_sources", "messages",
             "refresh_tokens", "schema_migrations", "users", "vector_memories",
         ]);
+    });
+});
+
+describe("users credit column", () => {
+    it("credits is a non-null integer defaulting to DEFAULT_USER_CREDITS", async () => {
+        const { rows } = await query<{ data_type: string; is_nullable: string; column_default: string }>(
+            `SELECT data_type, is_nullable, column_default FROM information_schema.columns
+              WHERE table_name = 'users' AND column_name = 'credits'`);
+        assert.equal(rows[0]!.data_type, "integer");
+        assert.equal(rows[0]!.is_nullable, "NO");
+        assert.equal(rows[0]!.column_default, String(DEFAULT_USER_CREDITS));
+        assert.equal(DEFAULT_USER_CREDITS, 500);
+    });
+
+    it("the non-negative CHECK from 001 is still in place", async () => {
+        const defs = (await constraintDefs("users")).map((d) => d.def);
+        assert.ok(defs.some((d) => /CHECK \(\(credits >= 0\)\)/.test(d)),
+            "credits >= 0 is the backstop against a negative balance");
+    });
+
+    it("a negative balance is impossible even by direct SQL", async () => {
+        const userId = await createProbeUser();
+        await expectPgError(
+            query(`UPDATE users SET credits = -1 WHERE id = $1`, [userId]), PG.CHECK);
+    });
+
+    it("only one credits column exists, and no separate credit table was added", async () => {
+        const { rows } = await query<{ table_name: string; column_name: string }>(
+            `SELECT table_name, column_name FROM information_schema.columns
+              WHERE table_schema = 'public' AND column_name LIKE '%credit%'`);
+        assert.deepEqual(rows, [{ table_name: "users", column_name: "credits" }]);
     });
 });
 
