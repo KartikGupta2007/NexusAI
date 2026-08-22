@@ -5,3 +5,4 @@ node_modules
 dist
 .neon
 ARCHITECTURE.md
+.model-cache

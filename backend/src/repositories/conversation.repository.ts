@@ -1,4 +1,5 @@
 import type { PoolClient, QueryResultRow } from "pg";
+import { CONVERSATION_MAX_RECENT_MESSAGES } from "../constants.ts";
 import { pool, query } from "../db/pool.ts";
 
 /**
@@ -133,6 +134,79 @@ export const findMessagesForUserConversation = async (
         [conversationId, userId],
     );
     return rows;
+};
+
+/**
+ * The tail of a conversation: the newest `limit` messages, **newest first**.
+ *
+ * Distinct from findMessagesForUserConversation above, which returns the whole thread in
+ * chronological order for replaying a conversation to the user. This one exists to build a
+ * Claude prompt, where the entire history is neither affordable nor wanted — so the LIMIT is
+ * pushed into Postgres rather than fetching every row and slicing in JavaScript. On a long
+ * conversation that is the difference between reading four index entries and reading
+ * thousands of rows to discard all but four.
+ *
+ * ORDER BY m.id DESC — descending on the sequence key, not created_at. Same reasoning as the
+ * ascending query: same-turn messages share NOW(), so created_at is not a total order and
+ * "the last 4" by timestamp is not well defined. `messages_conversation_id_id_idx
+ * (conversation_id, id)` serves this shape as a backwards index scan, so the LIMIT stops
+ * after four index entries.
+ *
+ * Returns newest-first because that is what the SQL produces; callers that need chronological
+ * order reverse it. conversationContext.services.ts is the one place that does.
+ *
+ * The join to `conversations` re-asserts ownership in SQL so this function is safe called on
+ * its own, matching the other message query.
+ */
+export const findRecentMessagesForUserConversation = async (
+    conversationId: string,
+    userId: string,
+    limit: number,
+    executor?: Executor,
+) => {
+    if (!Number.isInteger(limit) || limit < 1) {
+        throw new Error(`limit must be a positive integer, received ${limit}`);
+    }
+
+    const { rows } = await run<MessageRow>(
+        executor,
+        `SELECT m.id, m.role, m.content, m.created_at
+           FROM messages m
+           JOIN conversations c ON c.id = m.conversation_id
+          WHERE m.conversation_id = $1
+            AND c.user_id = $2
+       ORDER BY m.id DESC
+          LIMIT $3`,
+        [conversationId, userId, Math.min(limit, CONVERSATION_MAX_RECENT_MESSAGES)],
+    );
+    return rows;
+};
+
+/**
+ * Resolves one message by id, scoped to its owner.
+ *
+ * `user_id` is in the WHERE clause via the conversation, so a message belonging to somebody
+ * else returns no rows and is indistinguishable from one that does not exist. Callers that
+ * need to act on a single message — attaching sources to it, for instance — use this as the
+ * ownership gate rather than checking afterwards.
+ *
+ * Returns the role as well, because whether a message may carry web sources depends on it.
+ */
+export const findMessageForUser = async (
+    messageId: string,
+    userId: string,
+    executor?: Executor,
+) => {
+    const { rows } = await run<MessageRow & { conversation_id: string }>(
+        executor,
+        `SELECT m.id, m.role, m.content, m.created_at, m.conversation_id
+           FROM messages m
+           JOIN conversations c ON c.id = m.conversation_id
+          WHERE m.id = $1::bigint
+            AND c.user_id = $2`,
+        [messageId, userId],
+    );
+    return rows[0] ?? null;
 };
 
 /**

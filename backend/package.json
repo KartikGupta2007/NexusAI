@@ -11,13 +11,15 @@
     "build": "tsc -p tsconfig.json && npm run copy:sql",
     "start": "node dist/server.js",
     "migrate": "tsx src/db/migrate.ts",
-    "test": "tsx --test tests/*.test.ts",
+    "test": "tsx --test \"src/test/**/*.test.ts\"",
+    "verify:embeddings": "tsx src/scripts/verifyEmbeddings.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "copy:sql": "node --input-type=module -e \"import{cp}from'node:fs/promises';await cp('src/db/migrations','dist/db/migrations',{recursive:true})\""
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.40",
     "@anthropic-ai/sdk": "^0.120.0",
+    "@huggingface/transformers": "^4.2.0",
     "@tavily/core": "^0.7.7",
     "ai": "^7.0.70",
     "bcrypt": "^6.0.0",

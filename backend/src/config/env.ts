@@ -1,3 +1,5 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import { z } from "zod";
 
@@ -60,6 +62,11 @@ const envSchema = z.object({
 
     ANTHROPIC_API_KEY: z.string().min(1).optional(),
     TAVILY_API_KEY: z.string().min(1).optional(),
+
+    // Where the local embedding model's weights are cached. No API key: BGE-M3 runs
+    // in-process. Optional because a sane default is derived below; set it to move the
+    // ~570 MB download onto another volume, or to a warm path baked into a container image.
+    EMBEDDING_CACHE_DIR: z.string().min(1).optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -86,6 +93,15 @@ export const env = {
     corsOrigins: raw.CORS_ORIGINS.split(",")
         .map((origin) => origin.trim())
         .filter(Boolean),
+    /**
+     * Defaults to <backend>/.model-cache rather than transformers.js's own default, which
+     * is inside node_modules/@huggingface/transformers/.cache — a directory that any
+     * `npm ci` or `rm -rf node_modules` deletes, taking the 570 MB download with it.
+     * Resolved from this file's location so the path does not depend on the cwd.
+     */
+    embeddingCacheDir:
+        raw.EMBEDDING_CACHE_DIR ??
+        join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".model-cache"),
 } as const;
 
 export type Env = typeof env;
