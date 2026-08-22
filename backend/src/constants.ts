@@ -50,6 +50,29 @@ export const ACCESS_COOKIE = "accessToken";
 export const REFRESH_COOKIE = "refreshToken";
 
 /**
+ * Holds the Neon Auth session challenge for the length of one Google sign-in.
+ *
+ * Set when the browser is sent to Google and consumed when it comes back. httpOnly and
+ * scoped to GOOGLE_AUTH_PATH, so no other route — and no script — ever sees it. It is not a
+ * credential on its own: without the matching verifier Neon Auth returns nothing for it.
+ */
+export const GOOGLE_FLOW_COOKIE = "googleAuthFlow";
+
+/** Mount point of the Google redirect endpoints, and therefore the flow cookie's path. */
+export const GOOGLE_AUTH_PATH = "/api/v1/user/googleAuth";
+
+/** Ten minutes, matching the Max-Age Neon Auth puts on the challenge it issues. */
+export const GOOGLE_FLOW_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Query parameter the browser is sent back to the app with when Google sign-in fails.
+ *
+ * A redirect cannot carry a JSON error body, and the SPA has to be able to say *something*
+ * more useful than a silent return to the login screen.
+ */
+export const GOOGLE_AUTH_ERROR_PARAM = "googleAuth";
+
+/**
  * Rewrites the rolling conversation summary after a completed turn.
  *
  * Given the previous summary plus what has happened since, Claude returns one replacement

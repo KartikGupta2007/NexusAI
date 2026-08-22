@@ -5,6 +5,21 @@ Email/password auth is handled in this service. Google sign-in is delegated to
 issues and exchange it for a NexusAI session. There is no `google-auth-library`,
 no client secret in this repo, and one token format for the whole API.
 
+**Neon Auth is a backend dependency, reached only from this process.** The browser talks to
+this API and to nothing else:
+
+```
+Browser ──HTTPS──▶ NexusAI backend ──▶ Neon Auth  (Google sign-in)
+                                   ├──▶ Neon Postgres
+                                   ├──▶ Tavily
+                                   └──▶ Claude
+```
+
+The frontend holds no Neon Auth URL, no Neon SDK and no database client, and needs no
+environment variables at all — see `frontend/.env.example`. `NEON_AUTH_BASE_URL` and
+`NEON_AUTH_JWKS_URL` are server configuration and must never be exposed through a `VITE_`
+variable, which is compiled into the JS bundle and served to every visitor.
+
 ## Setup
 
 ```bash
@@ -22,18 +37,20 @@ Secrets you must set yourself (`openssl rand -base64 48`):
 All under `/api/v1/user`. Success bodies are `{ success, message, data? }`;
 failures are `{ success: false, code, message, errors[] }`.
 
-| Method | Path              | Auth   | Body                                        |
-| ------ | ----------------- | ------ | ------------------------------------------- |
-| POST   | `/register`       | —      | `{ email, password, name? }`                |
-| POST   | `/login`          | —      | `{ email, password }`                       |
-| POST   | `/googleAuth`     | —      | `{ token }` — a Neon Auth JWT               |
-| POST   | `/refresh-token`  | —      | `{ refreshToken? }` (or the cookie)         |
-| POST   | `/logout`         | —      | `{ refreshToken? }` (or the cookie)         |
-| POST   | `/logout-all`     | Bearer | —                                           |
-| GET    | `/me`             | Bearer | —                                           |
-| GET    | `/sessions`       | Bearer | —                                           |
-| DELETE | `/sessions/:id`   | Bearer | —                                           |
-| POST   | `/changePassword` | Bearer | `{ currentPassword?, newPassword }`         |
+| Method | Path                     | Auth   | Body                                    |
+| ------ | ------------------------ | ------ | --------------------------------------- |
+| POST   | `/register`              | —      | `{ email, password, name? }`            |
+| POST   | `/login`                 | —      | `{ email, password }`                   |
+| GET    | `/googleAuth/start`      | —      | — → `302` to Google (browsers)          |
+| GET    | `/googleAuth/callback`   | —      | — → `302` back to the app (browsers)    |
+| POST   | `/googleAuth`            | —      | `{ token }` — a Neon Auth JWT           |
+| POST   | `/refresh-token`         | —      | `{ refreshToken? }` (or the cookie)     |
+| POST   | `/logout`                | —      | `{ refreshToken? }` (or the cookie)     |
+| POST   | `/logout-all`            | Bearer | —                                       |
+| GET    | `/me`                    | Bearer | —                                       |
+| GET    | `/sessions`              | Bearer | —                                       |
+| DELETE | `/sessions/:id`          | Bearer | —                                       |
+| POST   | `/changePassword`        | Bearer | `{ currentPassword?, newPassword }`     |
 
 Every session response returns `{ user, accessToken, refreshToken, accessTokenExpiresIn,
 refreshTokenExpiresIn }` **and** sets `accessToken` / `refreshToken` as httpOnly cookies.
@@ -87,43 +104,59 @@ The write is scoped to the calling user, so another user's session id returns
 `404` and changes nothing. Revoking your own current session is allowed and behaves like
 `/logout` — cookies are cleared. To end everything at once, use `/logout-all`.
 
-## Google sign-in — the client half
+## Google sign-in
 
-Neon Auth runs the OAuth flow in the browser. Install `@neondatabase/neon-js` in the
-frontend and point it at `VITE_NEON_AUTH_URL` (the `NEON_AUTH_BASE_URL` value):
-
-```ts
-// src/auth.ts
-import { createAuthClient } from "@neondatabase/neon-js/auth";
-
-export const authClient = createAuthClient(import.meta.env.VITE_NEON_AUTH_URL, {
-  // The SPA and Neon Auth are on different origins, so the session cookie has to be
-  // sent explicitly or authClient.token() comes back undefined.
-  fetchOptions: { credentials: "include" },
-});
-```
+OAuth is a user-agent flow: the browser has to be handed to Google, and only a navigation
+can do that. So the browser's half is two redirects on **this** API, and no SDK:
 
 ```ts
-// 1. Send the user to Google. Neon handles the handshake and redirects back.
-await authClient.signIn.social({
-  provider: "google",
-  callbackURL: window.location.origin,
-});
-
-// 2. On return, trade the Neon Auth JWT for a NexusAI session.
-const { data } = await authClient.token();
-
-const res = await fetch("http://localhost:3003/api/v1/user/googleAuth", {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  credentials: "include",              // so our httpOnly cookies get stored
-  body: JSON.stringify({ token: data.token }),
-});
-const { data: session } = await res.json();   // { user, accessToken, ... }
+// The entire client-side implementation.
+window.location.assign("/api/v1/user/googleAuth/start");
 ```
 
-From here on the frontend only talks to the NexusAI API — the Neon Auth token is not
-needed again.
+Everything else happens server-side, in `neonAuth.services.ts`:
+
+```
+GET /googleAuth/start
+  ├─ POST {NEON_AUTH_BASE_URL}/sign-in/social  { provider: "google", callbackURL }
+  │    → { url }  +  Set-Cookie: __Secure-neon-auth.session_challenge
+  ├─ stores the challenge in an httpOnly `googleAuthFlow` cookie on our own domain
+  └─ 302 → url                     ▶ Google consent ▶ Neon /callback/google ▶ our callback
+
+GET /googleAuth/callback?neon_auth_session_verifier=…
+  ├─ GET {NEON_AUTH_BASE_URL}/get-session?neon_auth_session_verifier=…
+  │    (Cookie: the stored challenge)   → Set-Cookie: __Secure-neon-auth.session_token
+  ├─ GET {NEON_AUTH_BASE_URL}/token    → a Neon Auth JWT
+  ├─ POST {NEON_AUTH_BASE_URL}/sign-out   (best effort — the Neon session is now spent)
+  ├─ verifies the JWT against Neon's JWKS, then finds/links/creates the NexusAI user
+  └─ 302 → the app, holding NexusAI's httpOnly accessToken / refreshToken cookies
+```
+
+That verifier/challenge exchange is Neon Auth's own protocol for proxied auth — it is what
+`@neondatabase/auth/server`'s `exchangeOAuthToken` does, and what its Next.js adapter relies
+on. Nothing here reimplements OAuth: no client secret, no authorization code, no PKCE of our
+own, no `google-auth-library`.
+
+**Where the browser is sent back to** is derived from the request and checked against
+`CORS_ORIGINS`, not taken from a `?next=` parameter — so a forged `Host` header cannot turn
+either endpoint into an open redirect. A failed sign-in redirects to
+`/?googleAuth=incomplete|conflict|failed` and the SPA renders the reason; it cannot render a
+JSON error body, because the caller is a navigating browser.
+
+**No Neon cookie ever reaches the browser.** The Neon session exists only for the two calls
+that consume it and is signed out immediately after, so exactly one system answers "who is
+signed in": the NexusAI cookie.
+
+### `POST /googleAuth` — non-browser clients
+
+The token exchange endpoint is unchanged and still supported: given a Neon Auth JWT it
+verifies it against the JWKS and returns a NexusAI session. Browsers do not use it — they
+have no way to obtain a Neon Auth JWT, by design. It is the contract for native apps and CLIs
+that run their own Neon Auth handshake and cannot follow a cookie-setting redirect.
+
+Both paths converge on one `resolveGoogleUser()`, so there is a single implementation of
+find-link-or-create. Identity always comes from the verified token; a request body cannot
+assert a `userId`, `credits`, `role` or `email`.
 
 ### Before going live
 
@@ -141,7 +174,9 @@ localhost but not for production. To ship:
    `localhost` is already allowed on this project. Each Neon branch has its own
    `NEON_AUTH_BASE_URL`, so preview branches need their own redirect URI registered.
 4. Set `CORS_ORIGINS` to your real frontend origins and `NODE_ENV=production` (which
-   flips cookies to `Secure; SameSite=None`).
+   flips cookies to `Secure; SameSite=None`). `CORS_ORIGINS` now gates the `/googleAuth`
+   redirects as well, so an origin missing from it gets `400` on sign-in rather than a
+   CORS error later.
 
 ## Session model
 
@@ -185,11 +220,14 @@ identity onto an existing account is an account takeover, so that case returns
 
 ## Rate limits
 
-| Scope                                     | Window | Limit |
-| ----------------------------------------- | ------ | ----- |
-| all `/api/v1/user` routes                 | 15 min | 100   |
-| `/login`, `/googleAuth`, `/changePassword`| 15 min | 10    |
-| `/register`                               | 1 h    | 10    |
+| Scope                                       | Window | Limit |
+| ------------------------------------------- | ------ | ----- |
+| all `/api/v1/user` routes                   | 15 min | 100   |
+| `/login`, `/googleAuth*`, `/changePassword`  | 15 min | 10    |
+| `/register`                                 | 1 h    | 10    |
+
+The credential limiter skips successful requests, so a completed Google sign-in — two `302`s —
+costs nothing against the limit; only repeated failures throttle.
 
 Credential endpoints key on **IP + email**, so one attacker cannot lock a victim out by
 burning the limit from a single address, and a distributed spray against one account

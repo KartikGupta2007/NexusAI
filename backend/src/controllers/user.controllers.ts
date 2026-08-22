@@ -19,7 +19,13 @@ import {
     updatePasswordHash,
     type UserRow,
 } from "../repositories/user.repository.ts";
-import { verifyNeonAuthToken } from "../services/neonAuth.services.ts";
+import {
+    completeNeonGoogleSignIn,
+    startNeonGoogleSignIn,
+    verifyNeonAuthToken,
+    NEON_AUTH_VERIFIER_PARAM,
+    type NeonAuthIdentity,
+} from "../services/neonAuth.services.ts";
 import {
     clearSessionCookies,
     issueSession,
@@ -39,7 +45,14 @@ import type {
     LoginInput,
     RegisterInput,
 } from "../validators/user.validators.ts";
-import { UNIQUE_VIOLATION, DUMMY_HASH } from "../constants.ts";
+import {
+    UNIQUE_VIOLATION,
+    DUMMY_HASH,
+    GOOGLE_AUTH_ERROR_PARAM,
+    GOOGLE_AUTH_PATH,
+    GOOGLE_FLOW_COOKIE,
+    GOOGLE_FLOW_TTL_MS,
+} from "../constants.ts";
 
 
 const isUniqueViolation = (error: unknown, constraint?: string): boolean => {
@@ -124,17 +137,15 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
 
 
 /**
- * POST /api/v1/user/googleAuth
+ * Finds — or creates, or links — the NexusAI account behind a verified Google identity.
  *
- * Neon Auth (Managed Better Auth) owns the Google OAuth handshake. The client runs
- * `authClient.signIn.social({ provider: "google" })`, then posts the resulting Neon Auth
- * JWT here; we verify it against Neon's JWKS and exchange it for a NexusAI session.
+ * The single implementation of that decision, shared by both ways into Google sign-in: the
+ * browser redirect flow and the `POST /googleAuth` token exchange. Identity always arrives
+ * from `verifyNeonAuthToken`, never from a request body, so nothing a client sends can steer
+ * which account is returned.
  */
-export const googleAuth = asyncHandler(async (req: Request, res: Response) => {
-    const { token } = req.body as GoogleAuthInput;
-    const identity = await verifyNeonAuthToken(token);
-
-    const user = await withTransaction(async (client) => {
+const resolveGoogleUser = (identity: NeonAuthIdentity): Promise<UserRow> =>
+    withTransaction(async (client) => {
         const linked = await findUserByNeonAuthId(identity.neonAuthUserId, client);
         if (linked) return linked;
 
@@ -183,8 +194,123 @@ export const googleAuth = asyncHandler(async (req: Request, res: Response) => {
         }
     });
 
+/**
+ * POST /api/v1/user/googleAuth
+ *
+ * Exchanges a Neon Auth JWT for a NexusAI session. The token is verified against Neon's
+ * JWKS; a request body cannot assert an identity, only present one to be checked.
+ *
+ * The browser does not use this route — it has no way to obtain a Neon Auth JWT, by design
+ * (see the redirect pair below). It stays because it is the contract for clients that
+ * legitimately hold one: native apps and CLIs, which do their own Neon Auth handshake and
+ * cannot follow a cookie-setting redirect.
+ */
+export const googleAuth = asyncHandler(async (req: Request, res: Response) => {
+    const { token } = req.body as GoogleAuthInput;
+    const identity = await verifyNeonAuthToken(token);
+    const user = await resolveGoogleUser(identity);
+
     const session = await issueSession(user, req);
     return respondWithSession(res, 200, "Signed in with Google", session);
+});
+
+/**
+ * Where the browser is returned to once sign-in resolves, one way or the other.
+ *
+ * Derived from the request rather than configured, then checked against the CORS allowlist —
+ * so the app is always returned to the origin it left from, and a forged Host header cannot
+ * turn either endpoint into an open redirect. A `?next=` parameter would be the obvious
+ * alternative and is exactly the hole this avoids.
+ */
+const appOriginFor = (req: Request): string => {
+    const origin = `${req.protocol}://${req.get("host") ?? ""}`;
+    if (!env.corsOrigins.includes(origin)) {
+        throw ApiError.badRequest(
+            "Google sign-in is not available from this origin",
+            [{ field: "origin", message: `${origin} is not an allowed origin` }],
+        );
+    }
+    return origin;
+};
+
+const flowCookieOptions = () =>
+    ({
+        httpOnly: true,
+        secure: env.isProduction,
+        // The callback is a top-level navigation from Neon's origin, i.e. cross-site. Lax is
+        // sent on exactly that (a GET navigation) and nothing else; production needs None
+        // because Secure cookies there are already SameSite=None for the same reason.
+        sameSite: env.isProduction ? ("none" as const) : ("lax" as const),
+        path: GOOGLE_AUTH_PATH,
+        ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}),
+    });
+
+/**
+ * GET /api/v1/user/googleAuth/start
+ *
+ * Begins Google sign-in. A redirect endpoint rather than a JSON one because OAuth is a
+ * user-agent flow: the browser has to be handed to Google, and only a navigation can do
+ * that. Everything it needs to know is a NexusAI URL — the Neon Auth address, the callback
+ * registration and the challenge all stay on this side.
+ */
+export const googleAuthStart = asyncHandler(async (req: Request, res: Response) => {
+    const appOrigin = appOriginFor(req);
+    const { redirectUrl, challenge } = await startNeonGoogleSignIn({
+        callbackUrl: `${appOrigin}${GOOGLE_AUTH_PATH}/callback`,
+        origin: appOrigin,
+    });
+
+    res.cookie(GOOGLE_FLOW_COOKIE, challenge, {
+        ...flowCookieOptions(),
+        maxAge: GOOGLE_FLOW_TTL_MS,
+    });
+    return res.redirect(302, redirectUrl);
+});
+
+/**
+ * GET /api/v1/user/googleAuth/callback
+ *
+ * Where Neon Auth returns the browser after Google. Finishes the handshake server-side,
+ * establishes the NexusAI session, and sends the user back to the app.
+ *
+ * Failures redirect rather than render: the caller here is a navigating browser, so a JSON
+ * error body would replace the application with a page of it. The app is returned to with
+ * `?googleAuth=<code>` and shows the message itself.
+ */
+export const googleAuthCallback = asyncHandler(async (req: Request, res: Response) => {
+    const appOrigin = appOriginFor(req);
+    const back = (error?: string) =>
+        res.redirect(
+            302,
+            error ? `${appOrigin}/?${GOOGLE_AUTH_ERROR_PARAM}=${error}` : `${appOrigin}/`,
+        );
+
+    const verifier = req.query[NEON_AUTH_VERIFIER_PARAM];
+    const challenge = (req.cookies as Record<string, unknown> | undefined)?.[GOOGLE_FLOW_COOKIE];
+
+    // The challenge is spent either way: a verifier only works once, and a stale cookie
+    // would otherwise sit on the browser until it expired.
+    res.clearCookie(GOOGLE_FLOW_COOKIE, flowCookieOptions());
+
+    if (typeof verifier !== "string" || !verifier || typeof challenge !== "string" || !challenge) {
+        // A bookmarked callback, an expired flow, or the user declining at Google's screen.
+        return back("incomplete");
+    }
+
+    try {
+        const token = await completeNeonGoogleSignIn({ verifier, challenge, origin: appOrigin });
+        const identity = await verifyNeonAuthToken(token);
+        const user = await resolveGoogleUser(identity);
+
+        setSessionCookies(res, await issueSession(user, req));
+        return back();
+    } catch (error) {
+        // 409 is the one failure with a cause the user can act on: this email already has a
+        // password account that Google has not verified them for.
+        if (error instanceof ApiError && error.statusCode === 409) return back("conflict");
+        if (error instanceof ApiError && error.statusCode < 500) return back("failed");
+        throw error;
+    }
 });
 
 /**

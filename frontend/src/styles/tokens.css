@@ -1,0 +1,148 @@
+/*
+ * NexusAI design tokens.
+ *
+ * One ladder of surfaces, one accent, one set of type steps — declared once for light and
+ * re-pointed for dark. Components never name a raw colour; if a value is needed twice it belongs
+ * here.
+ *
+ * The dark palette is built on a blue-black (#0b0d12), not pure black. Pure black makes borders
+ * disappear and text glare, and it flattens the depth the shell relies on to separate sidebar
+ * from thread from composer. Every surface step below is a real, visible step.
+ *
+ * The accent is deliberately desaturated. A research tool is read for long stretches, and a
+ * saturated accent at that dwell time reads as pressure rather than polish.
+ */
+
+:root {
+    color-scheme: light;
+
+    /* ── Surfaces, lightest content sitting on darkest ground ─────────────── */
+    --bg: #fbfbfc;
+    --bg-elevated: #f4f5f8;
+    --surface: #ffffff;
+    --surface-2: #f0f1f5;
+    --surface-hover: #eceef3;
+    --surface-active: #e4e7ef;
+
+    --border: #e3e5ec;
+    --border-strong: #d1d5e0;
+
+    /* ── Text ──────────────────────────────────────────────────────────────── */
+    --text: #1a1d26;
+    --text-muted: #5c6377;
+    --text-subtle: #868da1;
+    --text-inverse: #ffffff;
+
+    /* ── Accent ────────────────────────────────────────────────────────────── */
+    --accent: #4f5bd5;
+    --accent-hover: #4149bd;
+    --accent-text: #4f5bd5;
+    --accent-soft: rgba(79, 91, 213, 0.09);
+    --accent-soft-hover: rgba(79, 91, 213, 0.14);
+    --accent-border: rgba(79, 91, 213, 0.28);
+
+    /* ── Status ────────────────────────────────────────────────────────────── */
+    --danger: #c2334d;
+    --danger-soft: rgba(194, 51, 77, 0.08);
+    --danger-border: rgba(194, 51, 77, 0.28);
+    --warning: #9a6114;
+    --warning-soft: rgba(200, 128, 30, 0.11);
+    --warning-border: rgba(200, 128, 30, 0.3);
+
+    /* ── Code ──────────────────────────────────────────────────────────────── */
+    --code-bg: #f5f6f9;
+    --code-border: #e3e5ec;
+    --code-text: #2b2f3c;
+
+    /* ── Elevation ─────────────────────────────────────────────────────────── */
+    --shadow-md: 0 4px 12px -2px rgba(16, 20, 34, 0.08), 0 2px 4px -2px rgba(16, 20, 34, 0.05);
+    --shadow-lg: 0 16px 40px -12px rgba(16, 20, 34, 0.18), 0 4px 10px -4px rgba(16, 20, 34, 0.08);
+
+    /* ── Geometry ──────────────────────────────────────────────────────────── */
+    --radius-xs: 6px;
+    --radius-sm: 9px;
+    --radius-md: 13px;
+    --radius-lg: 18px;
+    --radius-pill: 999px;
+
+    --sidebar-w: 274px;
+    /* Wide enough for tables and code, narrow enough that prose stays scannable. */
+    --thread-w: 792px;
+    --gutter: 28px;
+
+    /* ── Type ──────────────────────────────────────────────────────────────── */
+    --sans: "Inter var", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+    /* ── Motion ────────────────────────────────────────────────────────────── */
+    --ease: cubic-bezier(0.32, 0.72, 0.28, 1);
+    --fast: 130ms;
+    --base: 200ms;
+    --slow: 320ms;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        color-scheme: dark;
+
+        --bg: #0b0d12;
+        --bg-elevated: #101319;
+        --surface: #141821;
+        --surface-2: #1a1f2a;
+        --surface-hover: #1e2430;
+        --surface-active: #262d3b;
+
+        --border: #232936;
+        --border-strong: #333b4d;
+
+        --text: #e9ebf2;
+        --text-muted: #99a1b5;
+        --text-subtle: #6d7589;
+        --text-inverse: #0b0d12;
+
+        /* Lifted and softened for dark: the light-mode indigo goes muddy on a dark ground. */
+        --accent: #7f8cf5;
+        --accent-hover: #929df8;
+        --accent-text: #9aa5f9;
+        --accent-soft: rgba(127, 140, 245, 0.12);
+        --accent-soft-hover: rgba(127, 140, 245, 0.18);
+        --accent-border: rgba(127, 140, 245, 0.32);
+
+        --danger: #f2647f;
+        --danger-soft: rgba(242, 100, 127, 0.11);
+        --danger-border: rgba(242, 100, 127, 0.3);
+        --warning: #e3ad5c;
+        --warning-soft: rgba(227, 173, 92, 0.11);
+        --warning-border: rgba(227, 173, 92, 0.3);
+
+        --code-bg: #10141c;
+        --code-border: #232936;
+        --code-text: #d3d8e6;
+
+        --shadow-md: 0 4px 14px -2px rgba(0, 0, 0, 0.5), 0 2px 4px -2px rgba(0, 0, 0, 0.4);
+        --shadow-lg: 0 20px 48px -16px rgba(0, 0, 0, 0.7), 0 4px 12px -4px rgba(0, 0, 0, 0.5);
+    }
+}
+
+/*
+ * Decorative motion is opt-out at the source. Anything that only conveys polish is switched off
+ * here, while state-carrying motion (a caret, a thinking pulse) is separately reduced to a
+ * non-moving equivalent rather than removed — a user who cannot see movement still has to be able
+ * to tell that an answer is being written.
+ */
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --fast: 0ms;
+        --base: 0ms;
+        --slow: 0ms;
+    }
+
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+    }
+}

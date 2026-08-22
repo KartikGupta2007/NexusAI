@@ -3,6 +3,8 @@ import {
     changePassword,
     getCurrentUser,
     googleAuth,
+    googleAuthCallback,
+    googleAuthStart,
     listSessions,
     login,
     logout,
@@ -35,6 +37,14 @@ userRouter.use(authRouteLimiter);
 userRouter.post("/register", registrationLimiter, validateBody(registerSchema), register); 
 userRouter.post("/login", credentialLimiter, validateBody(loginSchema), login);
 userRouter.post("/googleAuth", credentialLimiter, validateBody(googleAuthSchema), googleAuth);
+
+/**
+ * The browser's half of Google sign-in: two redirects around the OAuth navigation, which is
+ * the only shape a user-agent flow can take. `credentialLimiter` skips successful requests,
+ * so a completed sign-in costs nothing and only repeated failures are throttled.
+ */
+userRouter.get("/googleAuth/start", credentialLimiter, googleAuthStart);
+userRouter.get("/googleAuth/callback", credentialLimiter, googleAuthCallback);
 userRouter.post("/refresh-token", validateBody(refreshTokenSchema), refreshToken);
 userRouter.post("/logout", logout);
 
