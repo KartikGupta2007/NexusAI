@@ -79,9 +79,13 @@ describe("bootstrap", () => {
         renderApp("/");
 
         // The button is unconditional: availability is the backend's configuration, not a flag
-        // the client reads. So a signed-out load makes no request beyond the session check.
+        // the client reads. So a signed-out load asks only whether there is a session — the
+        // check itself, then the one renewal attempt its 401 earns, and nothing else.
         expect(await screen.findByRole("button", { name: /continue with google/i })).toBeInTheDocument();
-        expect(backend.calls.map((call) => call.path)).toEqual(["/api/v1/user/me"]);
+        expect(backend.calls.map((call) => call.path)).toEqual([
+            "/api/v1/user/me",
+            "/api/v1/user/refresh-token",
+        ]);
     });
 
     it("reaches nothing but the NexusAI API on any load", async () => {
@@ -110,8 +114,12 @@ describe("Google sign-in", () => {
 
         // The whole of the client's part: hand the browser to our own API and stop.
         expect(assign).toHaveBeenCalledWith("/api/v1/user/googleAuth/start");
-        // No OAuth, no token exchange, no request to a third party — not even a fetch.
-        expect(backend.calls.map((call) => call.path)).toEqual(["/api/v1/user/me"]);
+        // No OAuth, no token exchange, no request to a third party. The only traffic is the
+        // session check the page load already made.
+        expect(backend.calls.map((call) => call.path)).toEqual([
+            "/api/v1/user/me",
+            "/api/v1/user/refresh-token",
+        ]);
     });
 
     it("shows the redirect in progress so the button cannot be double-fired", async () => {

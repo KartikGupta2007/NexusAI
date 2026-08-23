@@ -101,6 +101,10 @@ export interface FakeBackend {
     awaitChat: () => Promise<ChatHandle>;
     /** Makes the next chat POST fail at the HTTP layer, before any stream opens. */
     failNextChat: (failure: HttpFailure) => void;
+    /** Calls to /user/refresh-token, so a test can assert one renewal, not several. */
+    refreshCalls: () => RecordedCall[];
+    /** Kills the refresh cookie, so renewal fails the way an ended session does. */
+    expireRefreshToken: () => void;
     /** Makes the next GET of a conversation fail. */
     failNextConversationLoad: (failure: HttpFailure) => void;
     setConversations: (conversations: Conversation[]) => void;
@@ -115,6 +119,8 @@ export const installFakeBackend = (options: FakeBackendOptions = {}): FakeBacken
     // Mutable: signing in is what makes /user/me start answering, exactly as a cookie would.
     let user = options.user === null ? null : makeUser(options.user ?? {});
 
+    // A live session renews; an ended one cannot. Default is the realistic case.
+    let refreshWorks = true;
     let chatFailure: HttpFailure | null = null;
     let conversationFailure: HttpFailure | null = null;
     const waiters: ((handle: ChatHandle) => void)[] = [];
@@ -197,6 +203,17 @@ export const installFakeBackend = (options: FakeBackendOptions = {}): FakeBacken
                 ? success("Current user", { user })
                 : failure({ status: 401, code: "MISSING_ACCESS_TOKEN", message: "Authentication required" });
         }
+        // Rotation is invisible from here — the browser is handed new cookies and replays
+        // its request. What matters to a test is only whether the session survived.
+        if (path === "/api/v1/user/refresh-token") {
+            return refreshWorks && user
+                ? success("Session refreshed", { user })
+                : failure({
+                      status: 401,
+                      code: "INVALID_REFRESH_TOKEN",
+                      message: "Refresh token is invalid or has expired",
+                  });
+        }
         if (path === "/api/v1/user/logout") {
             user = null;
             return success("Signed out", undefined);
@@ -255,6 +272,10 @@ export const installFakeBackend = (options: FakeBackendOptions = {}): FakeBacken
             const existing = ready.shift();
             if (existing) return Promise.resolve(existing);
             return new Promise<ChatHandle>((resolve) => waiters.push(resolve));
+        },
+        refreshCalls: () => calls.filter((call) => call.path === "/api/v1/user/refresh-token"),
+        expireRefreshToken: () => {
+            refreshWorks = false;
         },
         failNextChat: (next) => {
             chatFailure = next;

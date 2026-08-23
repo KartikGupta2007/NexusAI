@@ -109,6 +109,18 @@ export const startNeonGoogleSignIn = async (input: {
     });
 
     if (!response.ok) {
+        /**
+         * Logged, never returned. The client gets one opaque sentence — but without the
+         * upstream reason in the server log, a project misconfiguration (a callback URL or
+         * origin Neon does not trust, which answers 403 INVALID_CALLBACKURL) is
+         * indistinguishable from Neon being down, and both read as NEON_AUTH_START_FAILED.
+         */
+        const detail = await response.text().catch(() => "");
+        console.error(
+            `[neon-auth] sign-in/social rejected: ${response.status} ${detail.slice(0, 300)}`,
+            { callbackUrl: input.callbackUrl, origin: input.origin },
+        );
+
         throw new ApiError(502, "Google sign-in could not be started", {
             code: "NEON_AUTH_START_FAILED",
         });

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { streamExistingChat, streamNewChat } from "../api/chat.ts";
+import { request } from "../api/client.ts";
 import { ApiError, describeError } from "../api/errors.ts";
 import type { ChatStreamEvent } from "../types/api.ts";
 import { installFakeBackend, makeSource } from "./helpers/fakeBackend.ts";
@@ -135,9 +136,58 @@ describe("typed events", () => {
     });
 });
 
+describe("session renewal", () => {
+    /**
+     * The access token is short-lived and the refresh cookie is not. Before this existed the
+     * session simply ended at the access token's expiry — a reload signed the user out, and a
+     * question typed after it came back "Your session expired".
+     */
+    it("renews the session on a 401 and replays the request", async () => {
+        backend = installFakeBackend();
+        backend.failNextChat({ status: 401, code: "MISSING_ACCESS_TOKEN", message: "Authentication required" });
+
+        const events = await drain(streamNewChat("q"), (chat) => {
+            chat.token("answered after renewal");
+            chat.close();
+        });
+
+        expect(events).toEqual([{ type: "token", text: "answered after renewal" }]);
+        expect(backend.refreshCalls()).toHaveLength(1);
+        // The original attempt, then the replay — the user's question is not lost.
+        expect(backend.chatCalls()).toHaveLength(2);
+    });
+
+    it("gives up when the refresh token is dead, without replaying", async () => {
+        backend = installFakeBackend();
+        backend.expireRefreshToken();
+        backend.failNextChat({ status: 401, code: "MISSING_ACCESS_TOKEN", message: "Authentication required" });
+
+        await expect(streamNewChat("q").next()).rejects.toMatchObject({ name: "ApiError", status: 401 });
+
+        expect(backend.refreshCalls()).toHaveLength(1);
+        // One attempt only: a renewal that failed means the session is genuinely over.
+        expect(backend.chatCalls()).toHaveLength(1);
+    });
+
+    it("renews once for a burst of 401s, so rotation cannot race itself", async () => {
+        backend = installFakeBackend({ user: null });
+
+        // Two requests in flight together, both rejected. A second rotation would present a
+        // token the first had just revoked, which the backend reads as replay.
+        const first = request<unknown>("/user/me").catch(() => "failed");
+        const second = request<unknown>("/user/me").catch(() => "failed");
+        await Promise.all([first, second]);
+
+        expect(backend.refreshCalls()).toHaveLength(1);
+    });
+});
+
 describe("failures before the stream opens", () => {
     const expectApiError = async (status: number, code: string) => {
         backend = installFakeBackend();
+        // A 401 only reaches the caller once renewal has failed too; anything else would be
+        // retried behind its back. See "session renewal" above.
+        backend.expireRefreshToken();
         backend.failNextChat({ status, code, message: "backend says no" });
 
         const events = streamNewChat("q");
