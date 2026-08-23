@@ -1,6 +1,6 @@
 import cookieParser from "cookie-parser";
 import cors from "cors";
-import express from "express";
+import express, { type Request, type Response } from "express";
 import helmet from "helmet";
 import { env } from "./config/env.ts";
 import { errorHandler, notFoundHandler } from "./middlewares/error.middleware.ts";
@@ -32,9 +32,15 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 app.use(cookieParser());
 
-app.get("/health", (_req, res) => {
-    res.json({ success: true, message: "NexusAI API is running" });
-});
+// Registered on `/` as well as `/health`: platform health checks and uptime monitors probe the
+// root by default, and a 404 there reads as "service down". HEAD needs no registration of its
+// own — Express answers it from the matching GET handler.
+const health = (_req: Request, res: Response) => {
+    res.json({ success: true, status: "ok", message: "NexusAI API is running" });
+};
+
+app.get("/", health);
+app.get("/health", health);
 
 // ROUTES
 app.use("/api/v1/user", userRouter);

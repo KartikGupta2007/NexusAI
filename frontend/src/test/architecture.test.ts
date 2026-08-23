@@ -43,6 +43,18 @@ const named = (path: string) => relative(frontendRoot, path);
 const matching = (pattern: RegExp): string[] =>
     files.filter((path) => pattern.test(read(path))).map(named);
 
+/**
+ * The same, over code with comments removed.
+ *
+ * Only for the assertions that are about what the code *does* — a doc comment naming an example
+ * URL is documentation, not a hard-coded host. Everything a comment could smuggle in (a Neon
+ * hostname, an SDK name) is still checked against the full text above.
+ */
+const matchingCode = (pattern: RegExp): string[] =>
+    files
+        .filter((path) => pattern.test(read(path).replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "")))
+        .map(named);
+
 const packageJson = JSON.parse(read(join(frontendRoot, "package.json"))) as {
     dependencies?: Record<string, string>;
     devDependencies?: Record<string, string>;
@@ -53,10 +65,17 @@ const declaredPackages = Object.keys({
 });
 
 /**
+ * The only variable the browser bundle may read, and the only VITE_ name either env file may
+ * declare: the origin of the NexusAI API, for when the frontend and backend are deployed to
+ * separate hosts. Everything else stays server-side.
+ */
+const ALLOWED_BROWSER_VARIABLE = "VITE_API_BASE_URL";
+
+/**
  * `.env.example` is committed and must exist. `.env` is gitignored, so on a fresh clone — or on a
- * machine where nobody created one, which is correct here since the frontend needs no variables —
- * it is simply absent. Absent is a pass, not a failure; the assertions below are about what these
- * files must *not* contain.
+ * machine that serves both halves from one host, where nothing needs setting — it is simply
+ * absent. Absent is a pass, not a failure; the assertions below are about what these files must
+ * *not* contain.
  */
 const envFiles = [".env", ".env.example"]
     .map((name) => {
@@ -118,19 +137,24 @@ describe("the frontend has no database dependency", () => {
 
 describe("Google sign-in goes through the NexusAI backend", () => {
     it("is a navigation to the backend's own redirect endpoint", () => {
-        // Both halves live in constants.ts now; api/auth.ts performs the navigation.
+        // Both halves live in constants.ts now; api/auth.ts performs the navigation. The URL is
+        // built from API_BASE, so it follows the API wherever it is deployed — a navigation
+        // cannot be proxied by a static frontend any more than a fetch can.
         const constants = read(join(srcRoot, "constants.ts"));
-        expect(constants).toContain('GOOGLE_SIGN_IN_PATH = "/api/v1/user/googleAuth/start"');
-        expect(read(join(srcRoot, "api", "auth.ts"))).toContain("GOOGLE_SIGN_IN_PATH");
+        expect(constants).toContain("GOOGLE_SIGN_IN_URL = `${API_BASE}/user/googleAuth/start`");
+        expect(read(join(srcRoot, "api", "auth.ts"))).toContain("GOOGLE_SIGN_IN_URL");
     });
 
-    it("addresses the API by relative path only, never an absolute host", () => {
-        // constants.ts is where every path now lives, so this is the file that would carry a host.
+    it("takes the API's host from configuration, and never hard-codes one", () => {
+        // constants.ts is where every path lives, so this is the file that would carry a host.
+        // The origin comes from one build-time variable and defaults to empty, which leaves the
+        // relative `/api/v1` that a single-host deployment and the dev proxy both want.
         const constants = read(join(srcRoot, "constants.ts"));
-        expect(constants).toContain('API_BASE = "/api/v1"');
-        expect(constants).not.toMatch(/https?:\/\//);
-        // And no source file anywhere may hard-code one.
-        expect(matching(/["'`]https?:\/\/[a-z]/i)).toEqual([]);
+        expect(constants).toContain(`import.meta.env.${ALLOWED_BROWSER_VARIABLE}`);
+        expect(constants).toContain("API_BASE = `${API_ORIGIN}/api/v1`");
+        // No source file anywhere may hard-code a host: the browser reaches the one origin it is
+        // configured with, or none.
+        expect(matchingCode(/["'`]https?:\/\/[a-z]/i)).toEqual([]);
     });
 
     it("holds no token, and never posts one", () => {
@@ -142,18 +166,20 @@ describe("Google sign-in goes through the NexusAI backend", () => {
 
 describe("frontend environment", () => {
     it("keeps the committed template, whatever a developer's local .env does or does not exist", () => {
-        // .env.example is tracked and documents that nothing is needed; .env is optional.
+        // .env.example is tracked and documents the one variable there is; .env is optional.
         expect(existsSync(join(frontendRoot, ".env.example"))).toBe(true);
         expect(envFiles.some((file) => file.name === ".env.example")).toBe(true);
     });
 
-    it("declares no VITE_ variable, because the browser needs none", () => {
+    it("declares no browser-side variable beyond the API origin", () => {
         for (const { name, contents } of envFiles) {
-            const declarations = contents
+            const declared = contents
                 .split("\n")
                 .map((line) => line.trim())
-                .filter((line) => line.startsWith("VITE_"));
-            expect(declarations, `${name} declares browser-side variables`).toEqual([]);
+                .filter((line) => line.startsWith("VITE_"))
+                .map((line) => line.split("=")[0]!.trim());
+            const unexpected = declared.filter((key) => key !== ALLOWED_BROWSER_VARIABLE);
+            expect(unexpected, `${name} declares unexpected browser-side variables`).toEqual([]);
         }
     });
 
@@ -164,10 +190,19 @@ describe("frontend environment", () => {
         }
     });
 
-    it("reads no environment value anywhere in src", () => {
-        // Nothing is configured browser-side, so nothing should be read browser-side. This is
-        // what keeps a future "just one more VITE_ var" from passing review unnoticed.
-        expect(matching(/import\.meta\.env\.[A-Z]/)).toEqual([]);
+    it("reads exactly one environment value anywhere in src", () => {
+        // The API's origin has to be configurable — a static frontend on its own host cannot
+        // proxy, so it must be told where the backend is. Nothing else does, and asserting the
+        // exact set is what keeps a future "just one more VITE_ var" from passing review
+        // unnoticed. A secret would be the real cost: anything inlined here ships to the browser.
+        const variablesRead = new Set(
+            files.flatMap((path) =>
+                [...read(path).matchAll(/import\.meta\.env\.([A-Z][A-Z0-9_]*)/g)].map(
+                    (match) => match[1]!,
+                ),
+            ),
+        );
+        expect([...variablesRead].sort()).toEqual([ALLOWED_BROWSER_VARIABLE]);
         // `node` is in this project's `types` for the sake of this very file (see
         // tsconfig.app.json); application code must not take advantage of it.
         expect(matching(/\bprocess\.env\b|from\s+["']node:/)).toEqual([]);

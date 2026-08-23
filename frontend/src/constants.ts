@@ -1,10 +1,10 @@
 /**
  * Every tunable value in the frontend, in one place.
  *
- * Nothing here is configuration in the deployment sense — the app reads no environment variables
- * (see .env.example for why). These are the constants the code would otherwise spell inline:
- * endpoint paths, presentation thresholds, animation durations, and the two patterns that parse
- * wire and model output.
+ * One value here is configuration in the deployment sense — where the API lives (see
+ * .env.example). Everything else is a constant the code would otherwise spell inline: endpoint
+ * paths, presentation thresholds, animation durations, and the two patterns that parse wire and
+ * model output.
  *
  * On the credit values in particular: they mirror backend policy for *presentation only*. The
  * backend remains the authority — it charges the credits and reports the balance, and nothing here
@@ -14,21 +14,34 @@
 // ── API ──────────────────────────────────────────────────────────────────────
 
 /**
- * Base path for every request the browser makes.
+ * Origin of the NexusAI API, when it is not the origin serving this app.
  *
- * Relative on purpose: same-origin in production, and Vite proxies /api to the backend in
- * development. There is no absolute host anywhere in the client, which is what keeps the browser
- * from reaching any service other than the NexusAI API.
+ * The single environment value the browser bundle reads, and it exists because the frontend and
+ * backend can be deployed to separate hosts: a static site cannot proxy, so the browser has to be
+ * told the API's address. Set it to an origin with no path — `https://api.example.com` — and the
+ * `/api/v1` below is appended here rather than repeated in the variable.
+ *
+ * Empty (or unset) keeps the same-origin behaviour: relative requests, which is what one host in
+ * front of both, or `npm run dev`'s proxy, already provides. Trailing slashes are stripped so
+ * `https://api.example.com/` and `https://api.example.com` mean the same thing.
+ *
+ * Vite inlines this at build time, so changing it means rebuilding the bundle, not restarting a
+ * process. It is also the *only* host the client can reach — there is no hard-coded URL anywhere
+ * in the source, and the architecture suite asserts that.
  */
-export const API_BASE = "/api/v1";
+const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
+
+/** Base URL for every request the browser makes. Relative when no API origin is configured. */
+export const API_BASE = `${API_ORIGIN}/api/v1`;
 
 /**
  * The backend redirect endpoint that begins Google sign-in.
  *
  * The whole of the client's part in OAuth: navigate here and stop. The backend owns the handshake
- * with Neon Auth, so no provider URL, SDK or token exists on this side.
+ * with Neon Auth, so no provider URL, SDK or token exists on this side. Absolute when the API is
+ * on another host, because a navigation cannot be proxied by a static frontend either.
  */
-export const GOOGLE_SIGN_IN_PATH = "/api/v1/user/googleAuth/start";
+export const GOOGLE_SIGN_IN_URL = `${API_BASE}/user/googleAuth/start`;
 
 /** Query parameter the backend returns the app with when Google sign-in did not complete. */
 export const GOOGLE_AUTH_ERROR_PARAM = "googleAuth";

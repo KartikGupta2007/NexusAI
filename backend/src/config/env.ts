@@ -61,6 +61,18 @@ const envSchema = z.object({
     CORS_ORIGINS: z.string().default("http://localhost:5173"),
     COOKIE_DOMAIN: z.string().min(1).optional(),
 
+    // Where the browser-facing app is served, e.g. https://nexusai.app. Set it when the
+    // frontend is deployed to a different host than this API: Google sign-in has to return
+    // the browser to the app, not to the API. Defaults to the first CORS origin, which is
+    // the single-host and local-development case.
+    APP_ORIGIN: z.string().min(1).optional(),
+
+    // This API's own public origin, e.g. https://api.nexusai.app. Set it when the browser
+    // reaches the API directly, so the OAuth callback URL handed to Neon Auth is a fixed
+    // value rather than one read off a forwarded Host header. Unset, it is derived per
+    // request and checked against the allowlist.
+    API_ORIGIN: z.string().min(1).optional(),
+
     ANTHROPIC_API_KEY: z.string().min(1).optional(),
     TAVILY_API_KEY: z.string().min(1).optional(),
 
@@ -70,7 +82,20 @@ const envSchema = z.object({
     EMBEDDING_CACHE_DIR: z.string().min(1).optional(),
 });
 
-const parsed = envSchema.safeParse(process.env);
+/**
+ * A blank value means "not set", not "set to empty".
+ *
+ * `NEON_BRANCH=` is how the committed template spells an optional variable, and a hosting
+ * dashboard hands over an empty string for any field left blank. Taken literally, every
+ * `.optional()` and `.default()` below would reject that blank form and refuse to boot — a
+ * baffling failure for a variable the operator deliberately left alone. So blank is dropped
+ * here and the schema sees an absent key, which is what the author meant by it.
+ */
+const provided = Object.fromEntries(
+    Object.entries(process.env).filter(([, value]) => value === undefined || value.trim() !== ""),
+);
+
+const parsed = envSchema.safeParse(provided);
 
 if (!parsed.success) {
     const issues = parsed.error.issues
@@ -80,6 +105,12 @@ if (!parsed.success) {
 }
 
 const raw = parsed.data;
+
+const withoutTrailingSlash = (value: string): string => value.replace(/\/+$/, "");
+
+const corsOrigins = raw.CORS_ORIGINS.split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 
 export const env = {
     ...raw,
@@ -91,9 +122,14 @@ export const env = {
     neonAuthJwksUrl:
         raw.NEON_AUTH_JWKS_URL ??
         `${raw.NEON_AUTH_BASE_URL.replace(/\/+$/, "")}/.well-known/jwks.json`,
-    corsOrigins: raw.CORS_ORIGINS.split(",")
-        .map((origin) => origin.trim())
-        .filter(Boolean),
+    corsOrigins,
+    /**
+     * Where sign-in returns the browser. Falls back to the first allowlisted origin, which is
+     * the same host the frontend is served from in a single-host or local setup.
+     */
+    appOrigin: withoutTrailingSlash(raw.APP_ORIGIN ?? corsOrigins[0] ?? "http://localhost:5173"),
+    /** Null when unset, meaning "derive it from the request" — see googleAuthStart. */
+    apiOrigin: raw.API_ORIGIN ? withoutTrailingSlash(raw.API_ORIGIN) : null,
     /**
      * Defaults to <backend>/.model-cache rather than transformers.js's own default, which
      * is inside node_modules/@huggingface/transformers/.cache — a directory that any

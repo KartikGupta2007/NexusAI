@@ -11,11 +11,11 @@
  * navigation can do that. Kept next to the API layer rather than in the page because it *is*
  * the client's half of the auth contract, small as it is.
  */
-import { GOOGLE_SIGN_IN_PATH } from "../constants.ts";
+import { GOOGLE_SIGN_IN_URL } from "../constants.ts";
 
 /** Leaves this page. Nothing after it runs. */
 export const startGoogleSignIn = (): void => {
-    window.location.assign(GOOGLE_SIGN_IN_PATH);
+    window.location.assign(GOOGLE_SIGN_IN_URL);
 };
 
 /**

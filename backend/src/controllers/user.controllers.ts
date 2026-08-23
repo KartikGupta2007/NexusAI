@@ -222,9 +222,21 @@ export const googleAuth = asyncHandler(async (req: Request, res: Response) => {
  * turn either endpoint into an open redirect. A `?next=` parameter would be the obvious
  * alternative and is exactly the hole this avoids.
  */
-const appOriginFor = (req: Request): string => {
+/**
+ * This API's own public origin — the half of the flow Neon Auth has to be able to reach, and
+ * the origin it validates the call from.
+ *
+ * API_ORIGIN when configured, which is the answer for a split deployment: the browser arrives
+ * here directly, so the callback URL must name this host, and a configured value cannot be
+ * moved by a forged Host header. Unset, it is derived from the request and checked against the
+ * allowlist — which is what keeps the derived form from becoming an open redirect, and what
+ * keeps development working through Vite's proxy, where the host stays the frontend's.
+ */
+const apiOriginFor = (req: Request): string => {
+    if (env.apiOrigin) return env.apiOrigin;
+
     const origin = `${req.protocol}://${req.get("host") ?? ""}`;
-    if (!env.corsOrigins.includes(origin)) {
+    if (!env.corsOrigins.includes(origin) && origin !== env.appOrigin) {
         throw ApiError.badRequest(
             "Google sign-in is not available from this origin",
             [{ field: "origin", message: `${origin} is not an allowed origin` }],
@@ -254,10 +266,10 @@ const flowCookieOptions = () =>
  * registration and the challenge all stay on this side.
  */
 export const googleAuthStart = asyncHandler(async (req: Request, res: Response) => {
-    const appOrigin = appOriginFor(req);
+    const apiOrigin = apiOriginFor(req);
     const { redirectUrl, challenge } = await startNeonGoogleSignIn({
-        callbackUrl: `${appOrigin}${GOOGLE_AUTH_PATH}/callback`,
-        origin: appOrigin,
+        callbackUrl: `${apiOrigin}${GOOGLE_AUTH_PATH}/callback`,
+        origin: apiOrigin,
     });
 
     res.cookie(GOOGLE_FLOW_COOKIE, challenge, {
@@ -278,11 +290,16 @@ export const googleAuthStart = asyncHandler(async (req: Request, res: Response) 
  * `?googleAuth=<code>` and shows the message itself.
  */
 export const googleAuthCallback = asyncHandler(async (req: Request, res: Response) => {
-    const appOrigin = appOriginFor(req);
+    const apiOrigin = apiOriginFor(req);
+    // The app's origin is configuration, not something read off this request: on a split
+    // deployment the browser is standing on the API's host right now, and the app it has to be
+    // returned to is somewhere else entirely.
     const back = (error?: string) =>
         res.redirect(
             302,
-            error ? `${appOrigin}/?${GOOGLE_AUTH_ERROR_PARAM}=${error}` : `${appOrigin}/`,
+            error
+                ? `${env.appOrigin}/?${GOOGLE_AUTH_ERROR_PARAM}=${error}`
+                : `${env.appOrigin}/`,
         );
 
     const verifier = req.query[NEON_AUTH_VERIFIER_PARAM];
@@ -298,7 +315,7 @@ export const googleAuthCallback = asyncHandler(async (req: Request, res: Respons
     }
 
     try {
-        const token = await completeNeonGoogleSignIn({ verifier, challenge, origin: appOrigin });
+        const token = await completeNeonGoogleSignIn({ verifier, challenge, origin: apiOrigin });
         const identity = await verifyNeonAuthToken(token);
         const user = await resolveGoogleUser(identity);
 
